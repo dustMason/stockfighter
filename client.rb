@@ -16,8 +16,16 @@ class Client
     get "/venues/#{venue}/stocks/#{stock}/quote"
   end
 
+  def order_book venue, stock
+    get "/venues/#{venue}/stocks/#{stock}"
+  end
+
   def order venue, stock, order_data
     post "/venues/#{venue}/stocks/#{stock}/orders", order_data
+  end
+
+  def stock_order venue, stock, order_id
+    get "/venues/#{venue}/stocks/#{stock}/orders/#{order_id}"
   end
 
   def stock_orders venue, account, stock
@@ -44,6 +52,12 @@ class Client
 
   def request method, path, options={}
     opts = @options.merge(options)
-    JSON.load(self.class.send(method, path, opts).body)
+    begin
+      JSON.load(self.class.send(method, path, opts).body)
+    rescue JSON::ParserError => e
+      puts "-> #{method} #{path} : #{e.message.strip}"
+      {}
+    end
   end
 end
+

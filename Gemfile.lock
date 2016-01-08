@@ -1,17 +1,34 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    cause (0.1)
+    colorize (0.7.7)
+    descriptive_statistics (2.5.1)
+    eventmachine (1.0.8)
+    faye-websocket (0.10.2)
+      eventmachine (>= 0.12.0)
+      websocket-driver (>= 0.5.1)
     httparty (0.13.7)
       json (~> 1.8)
       multi_xml (>= 0.5.2)
+    influxdb (0.2.3)
+      cause
+      json
     json (1.8.3)
     multi_xml (0.5.5)
+    websocket-driver (0.6.3)
+      websocket-extensions (>= 0.1.0)
+    websocket-extensions (0.1.2)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
+  colorize
+  descriptive_statistics
+  faye-websocket
   httparty
+  influxdb
 
 BUNDLED WITH
    1.11.2
