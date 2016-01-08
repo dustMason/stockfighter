@@ -1,10 +1,11 @@
 require 'eventmachine'
 require 'faye/websocket'
-require_relative './client.rb'
-require_relative './gm_client.rb'
+
 require_relative './array_median.rb'
+require_relative './client.rb'
+require_relative './columnize.rb'
+require_relative './gm_client.rb'
 require_relative './money.rb'
-require_relative './column_logger.rb'
 require_relative './stats.rb'
 
 apikey = File.open("apikey").read
@@ -13,7 +14,7 @@ gm_client = GMClient.new apikey
 level_data = gm_client.start_level "sell_side"
 
 # to do a full reset:
-# level_data = gm_client.reset
+level_data = gm_client.reset
 
 venue = level_data["venues"].first
 stock = level_data["tickers"].first
@@ -28,9 +29,7 @@ class Trader
   attr_reader :shares_held
 
   def initialize key, account, venue, stock
-    @logger = ColumnLogger.new("dueling_bulldozers.log", %i(id action originalQty qty price), 80, false, false)
     @stats = Stats.new
-
     @client = Client.new key
     @account = account
     @venue = venue
@@ -66,18 +65,6 @@ class Trader
     start_trade_timer # unless @last_ask == @ask || @last_bid == @bid
   end
 
-  def tricky
-    @logger.log "tricky"
-    @orders_to_place = []
-    # bait the bots by causing a string of small orders, pushing the bid down
-    (1..@price_ticks).to_a.each do |n|
-      price = @ask + (n*10)
-      @orders_to_place << sell(price)
-      @orders_to_place << buy(price)
-    end
-    place_orders
-  end
-
   def status
     contents = {
       cash: @cash.money,
@@ -102,7 +89,7 @@ class Trader
     @last = quote["last"] if quote["last"]
     @nav = @cash + (@shares_held * @last) if @last
     examine_quote quote
-    trade unless @chilling_out
+    # trade unless @chilling_out
     status
     send_quote_stats
   end
@@ -118,16 +105,42 @@ class Trader
       @cash -= subtotal
       @shares_held += filled
       @stats.g "bought", fill["price"]/100.0
-      @logger.log({id: order["id"], action: "bought", price: fill['price'].money, qty: filled})
       calculate_cost_basis
     elsif order["direction"] == "sell"
       @cash += subtotal
       @shares_held -= filled
       @stats.g "sold", fill["price"]/100.0
-      @logger.log({id: order["id"], action: "sold", price: fill['price'].money, qty: filled})
     end
     @stats.g "shares", @shares_held
     status
+  end
+
+  def death_spiral
+    # bait the bots. if i'm long, sell up. if i'm short, buy down.
+    @orders_to_place = []
+    interval = rand(10)
+    interval *= -1 if @shares_held < 0
+    orders = rand(6) + 6
+
+    (1..orders).to_a.each do |n|
+      price = @ask + (n*interval)
+      if @shares_held < 0
+        @orders_to_place << buy(price, rand(5) + 1)
+      else
+        @orders_to_place << sell(price, rand(5) + 1)
+      end
+    end
+    place_orders
+
+    EventMachine::Timer.new 3, proc {
+      cancel_orders @orders
+      if @shares_held < 0
+        @orders_to_place = [buy(@ask + (orders * interval) - 1)]
+      else
+        @orders_to_place = [sell(@ask + (orders * interval) + 1)]
+      end
+      place_orders
+    }
   end
 
   private
@@ -203,7 +216,6 @@ class Trader
       threads << Thread.new do
         cancel = @client.cancel_order @venue, @stock, order_id
         @orders.delete order_id
-        @logger.log({id: order_id, action: "cancel", originalQty: cancel["originalQty"], filled: cancel["totalFilled"]})
       end
     end
     threads.map(&:join)
@@ -277,16 +289,13 @@ class Trader
   def place_orders
     threads = []
     @orders_to_place.each do |o|
-      threads << Thread.new do
-        place_order(o)
-      end
+      threads << Thread.new { place_order(o) }
     end
     @stats.batch_a threads.map(&:value)
   end
 
   def place_order data
     order = @client.order(@venue, @stock, data)
-    @logger.log({id: order["id"], action: data["direction"], price: data["price"].money, qty: data["qty"]})
     # @stats.g data["direction"], data["price"]/100.0
     @orders[order["id"]] = order if order["id"]
     { series: data["direction"], values: { value: data["price"]/100.0 } }
@@ -298,11 +307,10 @@ EM.run do
   quotes = Faye::WebSocket::Client.new(quotes_uri)
   trader = Trader.new apikey, account, venue, stock
   log_cols = %w{bid ask bidSize askSize bidDepth askDepth last lastSize}
-  quote_logger = ColumnLogger.new("dueling_bulldozers_quotes.log", log_cols, 140)
 
-  # EM.add_periodic_timer(10) do
-  #   trader.tricky
-  # end
+  EM.add_periodic_timer(5) do
+    trader.death_spiral
+  end
 
   fills.on :message do |event|
     data = JSON.load(event.data)
@@ -312,7 +320,6 @@ EM.run do
   quotes.on :message do |event|
     begin
       data = JSON.load(event.data)
-      quote_logger.log(data["quote"].select { |k,_| log_cols.include? k })
       trader.update_order_book(data["quote"]) if data["quote"]
     rescue JSON::ParserError => e
       # puts "-> Error : #{e.message}"
