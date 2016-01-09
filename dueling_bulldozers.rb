@@ -11,7 +11,7 @@ require_relative './stats.rb'
 apikey = File.open("apikey").read
 
 gm_client = GMClient.new apikey
-level_data = gm_client.start_level "sell_side"
+level_data = gm_client.start_level "dueling_bulldozers"
 
 # to do a full reset:
 level_data = gm_client.reset
@@ -39,10 +39,13 @@ class Trader
     @shares_held = 0 # shares
     @nav = 0 # net asset value
     @last = 0
-    @bid = nil
-    @ask = nil
     @last_bid = 0
     @last_ask = 0
+
+    @recent_bids = []
+    @avg_bid = 0
+    @recent_asks = []
+    @avg_ask = 0
 
     @chilling_out = false
 
@@ -51,18 +54,9 @@ class Trader
     @orders = {} # order_id => order_data hash
 
     @price_interval = 1 # cents
-    @trade_amount = 100 # shares
-    @price_ticks = 3 # how many orders to make in each set, above AND below @target_price
-    @order_delay = 5 # seconds to wait before sending an order after a quote
-  end
-
-  def trade
-    status
-    @logger.br
-    cancel_orders @orders
-    create_orders
-    place_orders
-    start_trade_timer # unless @last_ask == @ask || @last_bid == @bid
+    @trade_amount = 99 # shares
+    @price_ticks = 4 # how many orders to make in each set, above AND below @target_price
+    @order_delay = 5
   end
 
   def status
@@ -76,20 +70,21 @@ class Trader
       last_ask: (@last_ask || 0).money,
       last: (@last || 0).money,
       cost_basis: @avg_cost_basis.money,
-      interval: @price_interval
+      interval: @price_interval,
+      avg_ask: @avg_ask,
+      avg_bid: @avg_bid
     }
     print contents.columnize + "\r"
   end
 
   def update_order_book quote
-    @ask ||= quote["ask"] if quote["ask"]
-    @bid ||= quote["bid"] if quote["bid"]
     @last_ask = quote["ask"] if quote["ask"]
     @last_bid = quote["bid"] if quote["bid"]
     @last = quote["last"] if quote["last"]
     @nav = @cash + (@shares_held * @last) if @last
-    examine_quote quote
-    # trade unless @chilling_out
+    @price_interval = (@last * 0.000534).to_i
+    calculate_average_bid
+    calculate_average_ask
     status
     send_quote_stats
   end
@@ -115,42 +110,52 @@ class Trader
     status
   end
 
-  def death_spiral
-    # bait the bots. if i'm long, sell up. if i'm short, buy down.
-    @orders_to_place = []
-    interval = rand(10)
-    interval *= -1 if @shares_held < 0
-    orders = rand(6) + 6
+  # strategies
+  # ###
 
-    (1..orders).to_a.each do |n|
-      price = @ask + (n*interval)
-      if @shares_held < 0
-        @orders_to_place << buy(price, rand(5) + 1)
-      else
-        @orders_to_place << sell(price, rand(5) + 1)
-      end
-    end
+  # just do a standard numberline style set of orders based on target_ask and target_bid
+  def boring
+    create_orders
     place_orders
+    EventMachine::Timer.new 4, proc { cancel_orders(@orders.select { |_,o| o["long_term"].nil? }) }
+  end
 
-    EventMachine::Timer.new 3, proc {
-      cancel_orders @orders
-      if @shares_held < 0
-        @orders_to_place = [buy(@ask + (orders * interval) - 1)]
-      else
-        @orders_to_place = [sell(@ask + (orders * interval) + 1)]
-      end
-      place_orders
-    }
+  # always be trawlin' with some low hanging orders on the books
+  def trawlin
+    @trawls = []
+    @trawls << buy((target_bid * 0.65).to_i, 400)
+    @trawls << sell((target_ask * 1.3).to_i, 400)
+    place_orders @trawls
+    EventMachine::Timer.new 29, proc { cancel_orders(@orders.select { |_,o| o["long_term"] == true }) }
   end
 
   private
+
+  def calculate_average_bid
+    @recent_bids.unshift @last_bid
+    if @recent_bids.size > 200
+      @recent_bids.slice!(0,200)
+    end
+    @avg_bid = @recent_bids.median
+  end
+
+  def calculate_average_ask
+    @recent_asks.unshift @last_ask
+    if @recent_asks.size > 200
+      @recent_asks.slice!(0,200)
+    end
+    @avg_ask = @recent_asks.median
+  end
 
   def send_quote_stats
     @stats.batch(
       bid: @last_bid/100.0,
       ask: @last_ask/100.0,
       nav: @nav/100.0,
-      last: @last/100.0
+      last: @last/100.0,
+      avg_bid: @avg_bid/100.0,
+      avg_ask: @avg_ask/100.0,
+      cash: @cash/100.0
     )
   end
 
@@ -160,52 +165,15 @@ class Trader
     @timer = EventMachine::Timer.new @order_delay, proc { @chilling_out = false }
   end
 
-  def examine_quote quote
-    @bid_stack ||= []
-    @ask_stack ||= []
-
-    @price_interval = (@last * 0.005).to_i
-
-    # @bid = ((@last_ask + @last_bid) / 2) - 1
-    # @ask = ((@last_ask + @last_bid) / 2)
-
-    @bid = @last_bid + 1
-    @ask = @last_ask - 1
-
-    # if @last_quote && @last_quote["bid"] != quote["bid"] && quote["bid"]
-    #   @bid_stack << quote["bid"]
-    # else
-    #   if @bid_stack.size > 1
-    #     intervals = @bid_stack.each_cons(2).map { |p| (p[1] - p[0]).abs if p[1] and p[0] }.compact
-    #     if intervals.size > 1
-    #       @bid = @bid_stack.max
-    #     end
-    #     @bid_stack = []
-    #   end
-    # end
-    #
-    # if @last_quote && @last_quote["ask"] != quote["ask"] && quote["ask"]
-    #   @ask_stack << quote["ask"]
-    # else
-    #   if @ask_stack.size > 1
-    #     intervals = @ask_stack.each_cons(2).map { |p| (p[1] - p[0]).abs if p[1] and p[0] }.compact
-    #     if intervals.size > 1
-    #       @ask = @ask_stack.min
-    #     end
-    #     @ask_stack = []
-    #   end
-    # end
-
-    @last_quote = quote
-  end
-
   def calculate_cost_basis
     if @orders.keys.size > 0
-      orders = @orders.select { |_,v| v["totalFilled"] > 0 && v["direction"] == "buy" }.values
+      orders = @orders.select { |_,v| v["totalFilled"] > 0 && v["direction"] == "buy" }.values.uniq { |o| o["id"] }
       if orders.size > 0
-        @avg_cost_basis = (orders.reduce(0) { |sum, o| sum + o["price"] }) / orders.size
-        # the above is supposed to be more like this:
-        # sum + ((o["fills"].reduce(0) { |fsum, f| fsum + f["price"] }) / o["fills"].size)
+        # @avg_cost_basis = (orders.reduce(0) { |sum, o| sum + o["price"] }) / orders.size
+        @avg_cost_basis = orders.reduce(0) { |sum, o|
+          fills = o["fills"].uniq { |f| f["qty"] }.map { |f| f["price"] }
+          sum + fills.median
+        } / orders.size
       end
     end
   end
@@ -223,20 +191,20 @@ class Trader
 
   def create_orders
     @orders_to_place = []
-    if safe?
+    if sane?
       (1..@price_ticks).to_a.reverse.each do |n|
-        @orders_to_place << buy(target_bid - (n*@price_interval) - rand(2)) if !too_long? && safe_to_buy?
-        @orders_to_place << sell(target_ask + (n*@price_interval) + rand(2)) if !too_short? && safe_to_sell?
+        @orders_to_place << buy(target_bid - (n*@price_interval)) if !too_long? && safe_to_buy?
+        @orders_to_place << sell(target_ask + (n*@price_interval)) if !too_short? && safe_to_sell?
       end
     end
   end
 
   def target_bid
-    @bid if @bid
+    @avg_bid
   end
 
   def target_ask
-    @ask if @ask
+    @avg_ask
   end
 
   def buy target_price, amount=nil
@@ -248,14 +216,14 @@ class Trader
   end
 
   def too_short?
-    @shares_held - @trade_amount < -699 + (@price_ticks * @trade_amount)
+    @shares_held - @trade_amount < -600 + (@price_ticks * @trade_amount)
   end
 
   def too_long?
-    @shares_held + @trade_amount > 699 - (@price_ticks * @trade_amount)
+    @shares_held + @trade_amount > 600 - (@price_ticks * @trade_amount)
   end
 
-  def safe?
+  def sane?
     target_bid && target_bid > 5 &&
     target_ask && target_ask > 5 &&
     target_bid < target_ask
@@ -267,8 +235,7 @@ class Trader
   end
 
   def safe_to_sell?
-    true
-    # @avg_cost_basis == 0 || (target_ask - (@price_interval * @price_ticks)) > @avg_cost_basis - 350
+    @avg_cost_basis == 0 || (target_ask - (@price_interval * @price_ticks)) > @avg_cost_basis - 350
   end
 
   def create_order price, direction, qty
@@ -286,17 +253,18 @@ class Trader
     end
   end
 
-  def place_orders
+  def place_orders orders=nil
     threads = []
-    @orders_to_place.each do |o|
-      threads << Thread.new { place_order(o) }
+    (orders || @orders_to_place).each do |o|
+      threads << Thread.new { place_order(o, !orders.nil?) }
     end
     @stats.batch_a threads.map(&:value)
   end
 
-  def place_order data
+  def place_order data, long_term=false
     order = @client.order(@venue, @stock, data)
     # @stats.g data["direction"], data["price"]/100.0
+    order["long_term"] = true if long_term
     @orders[order["id"]] = order if order["id"]
     { series: data["direction"], values: { value: data["price"]/100.0 } }
   end
@@ -306,10 +274,12 @@ EM.run do
   fills = Faye::WebSocket::Client.new(fills_uri)
   quotes = Faye::WebSocket::Client.new(quotes_uri)
   trader = Trader.new apikey, account, venue, stock
-  log_cols = %w{bid ask bidSize askSize bidDepth askDepth last lastSize}
 
   EM.add_periodic_timer(5) do
-    trader.death_spiral
+    trader.boring
+  end
+  EM.add_periodic_timer(30) do
+    trader.trawlin
   end
 
   fills.on :message do |event|
