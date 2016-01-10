@@ -25,6 +25,50 @@ class Trader < Bot
   def pump_dump
     # think like momo:
     # "oh look, the stock is rising i must buy"
+
+    @peak_price ||= 0
+    @peak_price = @last if @last > @peak_price
+
+    @recent_quotes ||= []
+    @recent_quotes.unshift @last
+    @recent_quotes.slice!(0,100) if @recent_quotes.size > 100
+    @avg_quote = @recent_quotes.median
+
+    if @last > 10
+      @starting_price ||= @last
+    end
+    if @starting_price
+      cancel_orders @orders
+      orders = []
+      if !@party_time
+        # start off by getting a large holding while its cheap
+        # and make money money money
+        orders << buy((@last * 1.03).to_i, 350)
+        orders << sell((@last * 1.05).to_i, 20)
+      end
+      if @last > @starting_price * 2.0
+        # i'm rich, flip the switch
+        @party_time = true
+      end
+      if @shares_held > 200 && @party_time
+        # join the party, keep selling into the rising stock until my holding is small
+        orders << sell(@last+5, rand(200)+100)
+      elsif @party_time && @last > (@starting_price + 500)
+        # once i'm sold down, try to tank the market
+        target = [@avg_quote, @last].min
+        orders << buy((@last * 0.995).to_i, rand(5)+50)
+        (1..6).to_a.each do |n|
+          orders << sell((target - (n*0.004)).to_i, (rand(5)+1)*2)
+        end
+        orders << sell((target / 1.1).to_i, (rand(5)+1)*10)
+        orders << sell((target / 1.25).to_i, (rand(5)+1)*10)
+        orders << sell((target / 1.5).to_i, (rand(5)+1)*10)
+        orders << sell((target / 2).to_i, (rand(5)+1)*10)
+      elsif @party_time && @last <= (@starting_price * 1.2) && @shares_held < 0
+        orders << buy(target, @shares_held * -1)
+      end
+      place_orders(orders)
+    end
   end
 end
 
@@ -33,7 +77,7 @@ EM.run do
   quotes = Faye::WebSocket::Client.new(quotes_uri)
   trader = Trader.new apikey, account, venue, stock
 
-  EM.add_periodic_timer(4) do
+  EM.add_periodic_timer(5) do
     trader.pump_dump
   end
 
