@@ -9,12 +9,11 @@ APIKEY = File.open("apikey").read
 
 gm_client = GMClient.new APIKEY
 level_data = gm_client.start_level "making_amends"
+# to do a full reset:
+# level_data = gm_client.reset
 venue = level_data["venues"].first
 stock = level_data["tickers"].first
 account = level_data["account"]
-
-# to do a full reset:
-# level_data = gm_client.reset
 
 
 fills_uri  = "wss://api.stockfighter.io/ob/api/ws/#{account}/venues/#{venue}/executions/stocks/#{stock}"

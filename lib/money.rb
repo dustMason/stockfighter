@@ -1,5 +1,5 @@
 class Fixnum
   def money
-    "$%.2f".format(self)
+    "$%.2f" % (self/100.0)
   end
 end
