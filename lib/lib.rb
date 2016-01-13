@@ -1,0 +1,7 @@
+require_relative './array_median.rb'
+require_relative './bot.rb'
+require_relative './client.rb'
+require_relative './columnize.rb'
+require_relative './gm_client.rb'
+require_relative './money.rb'
+require_relative './stats.rb'

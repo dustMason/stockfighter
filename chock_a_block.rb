@@ -1,10 +1,14 @@
-require 'pp'
-require_relative './client.rb'
+require_relative 'lib/lib.rb'
 
-apikey = "8b10794212a907f3977f24f146209016dda0c78e"
-venue = "ASLEX"
-stock = "YYOJ"
-account = "HMY77920417"
+apikey = File.open("apikey").read
+gm_client = GMClient.new apikey
+
+level_data = gm_client.start_level "chock_a_block"
+# to do a full reset:
+# level_data = gm_client.reset
+venue = level_data["venues"].first
+stock = level_data["tickers"].first
+account = level_data["account"]
 
 class Trader
   def initialize key, account, venue, stock

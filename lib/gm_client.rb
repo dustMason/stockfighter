@@ -19,6 +19,7 @@ class GMClient
     @current_level = level_name
     level_data = request(:post, "/levels/#{level_name}")
     @instanceId = level_data['instanceId']
+    puts "=> Started game #{@instanceId}"
     level_data
   end
 
@@ -32,6 +33,11 @@ class GMClient
       stop_level @instanceId
       start_level @current_level
     end
+  end
+
+  def report account, link, summary
+    body = { account: account, explanation_link: link, executive_summary: summary }
+    request :post, "/instances/#{@instanceId}/judge", body: JSON.dump(body)
   end
 
   private

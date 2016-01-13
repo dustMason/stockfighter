@@ -1,27 +1,27 @@
 require_relative './array_median.rb'
 require_relative './client.rb'
 require_relative './columnize.rb'
-require_relative './gm_client.rb'
 require_relative './money.rb'
 require_relative './stats.rb'
 
 class Bot
+  attr_reader :client, :stats, :nav, :cash, :shares_held
+  attr_accessor :silent, :last
+
   def initialize key, account, venue, stock
     @stats = Stats.new
     @client = Client.new key
     @account = account
     @venue = venue
     @stock = stock
-
+    @silent = false
     @cash = 0
     @shares_held = 0 # shares
     @nav = 0 # net asset value
     @last = 0
     @last_bid = 0
     @last_ask = 0
-
     @orders = {} # order_id => order_data hash
-
     @trade_amount = 500 # shares
   end
 
@@ -34,7 +34,7 @@ class Bot
       last_ask: (@last_ask || 0).money,
       last: (@last || 0).money
     }
-    print contents.columnize + "\r"
+    print contents.columnize + "\r" unless @silent
   end
 
   def update_order_book quote
@@ -42,8 +42,9 @@ class Bot
     @last_bid = quote["bid"] if quote["bid"]
     @last = quote["last"] if quote["last"]
     @nav = @cash + (@shares_held * @last) if @last
+    post_order_book_update_hook quote
     status
-    send_quote_stats
+    send_quote_stats unless @silent
   end
 
   def update_position_with fill
@@ -54,15 +55,20 @@ class Bot
     if order["direction"] == "buy"
       @cash -= subtotal
       @shares_held += filled
-      @stats.g "bought", fill["price"]/100.0
+      @stats.g "bought", fill["price"]/100.0 unless @silent
     elsif order["direction"] == "sell"
       @cash += subtotal
       @shares_held -= filled
-      @stats.g "sold", fill["price"]/100.0
+      @stats.g "sold", fill["price"]/100.0 unless @silent
     end
-    @stats.g "shares", @shares_held
+    @stats.g "shares", @shares_held unless @silent
+    post_position_update_hook
     status
   end
+
+  # override me:
+  def post_position_update_hook; end
+  def post_order_book_update_hook quote; end
 
   private
 
@@ -73,7 +79,7 @@ class Bot
       nav: @nav/100.0,
       last: @last/100.0,
       cash: @cash/100.0
-    )
+    ) unless @silent
   end
 
   def cancel_orders orders

@@ -1,17 +1,12 @@
 require 'eventmachine'
 require 'faye/websocket'
-
-require_relative './gm_client.rb'
-require_relative './bot.rb'
+require_relative 'lib/lib.rb'
 
 apikey = File.open("apikey").read
-
 gm_client = GMClient.new apikey
 level_data = gm_client.start_level "irrational_exuberance"
-
 # to do a full reset:
-level_data = gm_client.reset
-
+# level_data = gm_client.reset
 venue = level_data["venues"].first
 stock = level_data["tickers"].first
 account = level_data["account"]
@@ -25,18 +20,6 @@ class Trader < Bot
   def pump_dump
     # think like momo:
     # "oh look, the stock is rising i must buy"
-
-    @peak_price ||= 0
-    @peak_price = @last if @last > @peak_price
-
-    @recent_quotes ||= []
-    @recent_quotes.unshift @last
-    @recent_quotes.slice!(0,100) if @recent_quotes.size > 100
-    @avg_quote = @recent_quotes.median
-
-    if @last > 10
-      @starting_price ||= @last
-    end
     if @starting_price
       cancel_orders @orders
       orders = []
@@ -46,30 +29,70 @@ class Trader < Bot
         orders << buy((@last * 1.03).to_i, 350)
         orders << sell((@last * 1.05).to_i, 20)
       end
-      if @last > @starting_price * 2.0
-        # i'm rich, flip the switch
-        @party_time = true
-      end
-      if @shares_held > 200 && @party_time
-        # join the party, keep selling into the rising stock until my holding is small
-        orders << sell(@last+5, rand(200)+100)
-      elsif @party_time && @last > (@starting_price + 500)
-        # once i'm sold down, try to tank the market
-        target = [@avg_quote, @last].min
-        orders << buy((@last * 0.995).to_i, rand(5)+50)
-        (1..6).to_a.each do |n|
-          orders << sell((target - (n*0.004)).to_i, (rand(5)+1)*2)
+
+      if @time_to_get_out
+        orders << buy(@last, @shares_held * -1)
+      elsif @party_time
+        if @shares_held > 450
+          # join the party, keep selling into the rising stock until my holding is small
+          orders << sell(@last, rand(200)+100)
+        elsif @last > @crash_target
+          # once i'm sold down, try to tank the market
+          target = [@avg_quote, @last].min
+          orders << buy((@last * 0.995).to_i, rand(5)+50)
+          (3..10).to_a.each do |n|
+            orders << sell((target - (n*0.004)).to_i, (rand(5)+1)*100)
+            orders << sell((target / n).to_i, (rand(5)+1)*100)
+            orders << buy((target - (n*0.004)).to_i + 3, (rand(5)+1)*100)
+            orders << buy((target / n).to_i + 3, (rand(5)+1)*100)
+            orders << buy((target / n).to_i - 10, (rand(5)+1)*100)
+          end
         end
-        orders << sell((target / 1.1).to_i, (rand(5)+1)*10)
-        orders << sell((target / 1.25).to_i, (rand(5)+1)*10)
-        orders << sell((target / 1.5).to_i, (rand(5)+1)*10)
-        orders << sell((target / 2).to_i, (rand(5)+1)*10)
-      elsif @party_time && @last <= (@starting_price * 1.2) && @shares_held < 0
-        orders << buy(target, @shares_held * -1)
       end
       place_orders(orders)
     end
   end
+
+  def post_order_book_update_hook
+    @ticks_below_target ||= 0
+    if @last > 10
+      @starting_price ||= @last
+    end
+    if @starting_price && @last > @starting_price * 8
+      @party_time = true # i'm rich, flip the switch
+    end
+    @peak_price ||= 0
+    if @last > @peak_price
+      @peak_price = @last
+      @crash_target = @peak_price - (@peak_price * 0.82).to_i
+    end
+    @recent_quotes ||= []
+    @recent_quotes.unshift @last
+    @recent_quotes.slice!(0,50) if @recent_quotes.size > 50
+    @avg_quote = @recent_quotes.median
+    if @crash_target && @avg_quote <= @crash_target && @party_time
+      @ticks_below_target += 1
+    end
+    if @ticks_below_target > 5
+      @time_to_get_out = true
+    end
+  end
+
+  def status
+    contents = {
+      cash: @cash.money,
+      shares: @shares_held,
+      nav: @nav.money,
+      last: (@last || 0).money,
+      crash_target: (@crash_target || 0).money,
+      avg_quote: (@avg_quote || 0).money,
+      out: @time_to_get_out,
+      party: @party_time,
+      ticks: @ticks_below_target
+    }
+    print contents.columnize + "\r"
+  end
+
 end
 
 EM.run do

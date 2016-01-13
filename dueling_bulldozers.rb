@@ -1,12 +1,6 @@
 require 'eventmachine'
 require 'faye/websocket'
-
-require_relative './array_median.rb'
-require_relative './client.rb'
-require_relative './columnize.rb'
-require_relative './gm_client.rb'
-require_relative './money.rb'
-require_relative './stats.rb'
+require_relative 'lib/lib.rb'
 
 apikey = File.open("apikey").read
 

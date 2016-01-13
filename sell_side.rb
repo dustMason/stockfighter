@@ -1,12 +1,15 @@
 require 'pp'
-require_relative './client.rb'
-require_relative "./array_median.rb"
+require_relative 'lib/lib.rb'
 
 apikey = File.open("apikey").read
+gm_client = GMClient.new apikey
 
-venue = "DAUKEX"
-stock = "ASL"
-account = "RRB1985599"
+level_data = gm_client.start_level "sell_side"
+# to do a full reset:
+level_data = gm_client.reset
+venue = level_data["venues"].first
+stock = level_data["tickers"].first
+account = level_data["account"]
 
 class Trader
   def initialize key, account, venue, stock
